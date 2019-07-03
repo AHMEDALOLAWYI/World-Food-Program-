@@ -15,9 +15,10 @@ from tqdm import tqdm
 
 DEVICE = 'cuda'
 EPOCHS = 5
-BATCH_SIZE = 2
-TRAIN_IMAGES_ROOT = 'data/train_sample'
-VAL_IMAGES_ROOT = 'data/val_sample'
+TRAIN_BATCH_SIZE = 2
+VALID_BATCH_SIZE = 1
+TRAIN_IMAGES_ROOT = 'data/train'
+VAL_IMAGES_ROOT = 'data/val'
 WORKERS = 8
 HR_PATCH = (512, 512)
 SCALE = 2
@@ -31,8 +32,10 @@ ADVERSARIAL_LOSS_WEIGHT = 1e-3
 MSE_LOSS_WEIGHT = 1.0
 EXP_NO = 1
 LOAD_CHECKPOINT = None
-TENSORBOARD_LOGDIR = 'tboard-sampleset'
-END_EPOCH_SAVE_SAMPLES_PATH = 'epoch_end_samples-sampleset'
+TENSORBOARD_LOGDIR = f'{EXP_NO:02d}-tboard'
+END_EPOCH_SAVE_SAMPLES_PATH = f'{EXP_NO:02d}-epoch_end_samples'
+WEIGHTS_SAVE_PATH = f'{EXP_NO:02d}-weights'
+BATCHES_TO_SAVE = 3
 
 
 # Too many losses to keep track of
@@ -92,7 +95,7 @@ def pbar_desc(label, epoch, total_epochs, loss_val):
     return f'{label}: {epoch:04d}/{total_epochs} | {loss_val:.3f}'
 
 
-def save_images(path, lr_images, fake_hr, hr_images, epoch):
+def save_images(path, lr_images, fake_hr, hr_images, epoch, batchid):
 
     images_path = os.path.join(path, f'{epoch:04d}')
 
@@ -103,15 +106,15 @@ def save_images(path, lr_images, fake_hr, hr_images, epoch):
 
     for i, tensor in enumerate(lr_images):
         image = to_pil(tensor)
-        image.save(f'{images_path}/{i:02d}_lr.jpg', 'JPEG')
+        image.save(f'{images_path}/{batchid}_{i:02d}_lr.jpg', 'JPEG')
 
     for i, tensor in enumerate(fake_hr):
         image = to_pil(tensor)
-        image.save(f'{images_path}/{i:02d}_fake.jpg', 'JPEG')
+        image.save(f'{images_path}/{batchid}_{i:02d}_fake.jpg', 'JPEG')
 
     for i, tensor in enumerate(hr_images):
         image = to_pil(tensor)
-        image.save(f'{images_path}/{i:02d}_hr.jpg', 'JPEG')
+        image.save(f'{images_path}/{batchid}_{i:02d}_hr.jpg', 'JPEG')
 
 
 def train(G, D, trn_dl, epoch, epochs, content_loss, MSE, adv_loss, opt_G, opt_D, train_losses):
@@ -160,6 +163,18 @@ def train(G, D, trn_dl, epoch, epochs, content_loss, MSE, adv_loss, opt_G, opt_D
         train_losses.update(content=cont_loss.item(), mse=mse_loss.item(), adversarial=g_adv_loss.item(),
                             generator=g_loss.item(), discriminator=d_loss.item())
 
+        # Cleanup
+        del lr_imgs
+        del hr_imgs
+        del fake_imgs
+        del g_loss
+        del g_adv_loss
+        del mse_loss
+        del cont_loss
+        del d_fake_preds
+        del d_real_preds
+
+
 
 def evaluate(G, D, val_dl, epoch, epochs, content_loss, MSE, adv_loss, val_losses, best_val_loss):
     # Set the nets into evaluation mode
@@ -192,18 +207,29 @@ def evaluate(G, D, val_dl, epoch, epochs, content_loss, MSE, adv_loss, val_losse
     avg_disval_loss = avg_val_losses['discriminator']
     if avg_val_loss < best_val_loss:
         best_val_loss = g_loss.item()
-        torch.save(G.state_dict(), f'{EXP_NO:02d}-G_epoch-{epoch:04d}_total-loss-{avg_val_loss:.3f}.pth')
-        torch.save(D.state_dict(), f'{EXP_NO:02d}-D_epoch-{epoch:04d}_total-loss-{avg_disval_loss:.3f}.pth')
+        torch.save(G.state_dict(), f'{WEIGHTS_SAVE_PATH}/{EXP_NO:02d}-G_epoch-{epoch:04d}_total-loss-{avg_val_loss:.3f}.pth')
+        torch.save(D.state_dict(), f'{WEIGHTS_SAVE_PATH}/{EXP_NO:02d}-D_epoch-{epoch:04d}_total-loss-{avg_disval_loss:.3f}.pth')
+
+    # Cleanup
+    del lr_imgs
+    del hr_imgs
+    del fake_imgs
+    del g_loss
+    del g_adv_loss
+    del mse_loss
+    del cont_loss
+    del d_fake_preds
+    del d_real_preds
 
     return best_val_loss
 
 
 def main():
     trn_ds = loaders.SatelliteDataset(TRAIN_IMAGES_ROOT, HR_PATCH, scale_factor=SCALE)
-    trn_dl = DataLoader(trn_ds, BATCH_SIZE, shuffle=True, num_workers=WORKERS)
+    trn_dl = DataLoader(trn_ds, TRAIN_BATCH_SIZE, shuffle=True, num_workers=WORKERS)
 
     val_ds = loaders.SatelliteValDataset(VAL_IMAGES_ROOT, HR_PATCH, scale_factor=SCALE)
-    val_dl = DataLoader(val_ds, BATCH_SIZE, shuffle=False, num_workers=WORKERS)
+    val_dl = DataLoader(val_ds, VALID_BATCH_SIZE, shuffle=False, num_workers=WORKERS)
     start_epoch = 1
     best_val_loss = float('inf')
 
@@ -213,9 +239,12 @@ def main():
     sched_G = optim.lr_scheduler.StepLR(opt_G, LR_STEP, gamma=LR_DECAY)
 
     # Discriminator
-    D = models.Discriminator(64, HR_PATCH[0], sigmoid=True)
+    D = models.Discriminator(48, HR_PATCH[0], sigmoid=True)
     opt_D = optim.Adam(D.parameters(), lr=LR_D)
     sched_D = optim.lr_scheduler.StepLR(opt_D, LR_STEP, gamma=LR_DECAY)
+
+    if not os.path.exists(WEIGHTS_SAVE_PATH):
+        os.mkdir(WEIGHTS_SAVE_PATH)
 
     if LOAD_CHECKPOINT is not None:
         checkpoint = torch.load(LOAD_CHECKPOINT, pickle_module=dill)
@@ -266,12 +295,14 @@ def main():
         train_losses.reset()
         val_losses.reset()
 
-        # Save a real vs fake batch for quality inspection
-        lrs, hrs = next(iter(val_dl))
-        fakes = G(lrs.to(DEVICE))
+        # Save real vs fake samples for quality inspection
+        generator = iter(val_dl)
+        for j in range(BATCHES_TO_SAVE):
+            lrs, hrs = next(generator)
+            fakes = G(lrs.to(DEVICE))
 
-        # Save samples at the end
-        save_images(END_EPOCH_SAVE_SAMPLES_PATH, lrs.detach().cpu(), fakes.detach().cpu(), hrs, epoch)
+            # Save samples at the end
+            save_images(END_EPOCH_SAVE_SAMPLES_PATH, lrs.detach().cpu(), fakes.detach().cpu(), hrs, epoch, j)
 
 
 if __name__ == '__main__':
