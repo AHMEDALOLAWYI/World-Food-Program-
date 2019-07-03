@@ -4,20 +4,20 @@
 # Credit for the CVAE code itself to the TensorFlow team - https://www.tensorflow.org/beta/tutorials/generative/cvae
 
 import tensorflow as tf
-from tensorflow.keras import layers
+from tensorflow.python.keras import layers
 import numpy as np
 import matplotlib.pyplot as plt
 
 # Set program-wide variables
-in_shape = (130, 130, 3)
-num_units = (130 * 7 * 7)
+in_shape = (64, 64, 3)
+num_units = (64 * 7 * 7)
 
-image_path = None
-hi_res_image_path = None
+path_to_images = "../megatools/highres-2000/"
 
 epochs = 1000
 latent_dim = 50
 examples_to_generate = 10
+
 
 class CVAE(tf.keras.Model):
     def __init__(self, latent_dim):
@@ -25,10 +25,10 @@ class CVAE(tf.keras.Model):
         self.latent_dim = latent_dim
         self.inference_net = tf.keras.Sequential(
             [
-                layers.InputLayer(input_shape=in_shape)
-                layers.Conv2D(filters=32, kernel_size=3, strides=(2, 2), activation='relu'),
-                layers.conv2D(filters=64, kernel_size=3, strides=(2, 2), activation='relu'),
-                layers.Flatten()
+                layers.InputLayer(input_shape=in_shape),
+                layers.Conv2D(filters=64, kernel_size=3, strides=(2, 2), activation='relu'),
+                layers.Conv2D(filters=128, kernel_size=3, strides=(2, 2), activation='relu'),
+                layers.Flatten(),
                 layers.Dense(latent_dim * 2)
             ]
         )
@@ -36,7 +36,8 @@ class CVAE(tf.keras.Model):
             [
                 layers.InputLayer(input_shape=(latent_dim,)),
                 layers.Dense(units=num_units, activation=tf.nn.relu),
-                layers.Reshape(target_shape=num_units),
+                layers.Reshape(target_shape=(7, 7, 64)),
+                layers.Conv2DTranspose(filters=128, kernel_size=3, strides=(2, 2), padding="SAME", activation='relu'),
                 layers.Conv2DTranspose(filters=64, kernel_size=3, strides=(2, 2), padding="SAME", activation='relu'),
                 layers.Conv2DTranspose(filters=1, kernel_size=3, strides=(1, 1), padding="SAME")
             ]
@@ -92,8 +93,36 @@ def apply_gradients(opt, grads, vars):
     opt.apply_gradients(zip(grads, vars))
 
 
+def generate_images(model, epoch, test_input, fname):
+  predictions = model.sample(test_input)
+  plt.figure(figsize=(64,64))
+
+  for i in range(predictions.shape[0]):
+      plt.subplot(64, 64, i+1)
+      plt.imshow(predictions[i, :, :, 0])
+      plt.axis('off')
+
+  plt.savefig('./vae_output/{}_{}.png'.format(fname, epoch))
+
+
 if __name__ == "__main__":
     vector_for_generation = tf.random.normal(shape=[examples_to_generate, latent_dim])
     model = CVAE(latent_dim)
-    # TODO: Finish writing the model to generate images
+    optimizer = tf.keras.optimizers.Adam()
+    generate_images(model, 0, vector_for_generation, "test")
+    # TODO: Do this for lots of images instead of just one
+    train_x = path_to_images + "00075.png"
+    test_x = path_to_images + "00151.png"
+    for epoch in range(1, epochs+1):
+        for x in train_x:
+            gradients, loss = compute_gradients(model, x)
+            apply_gradients(optimizer, gradients, model.trainable_variables)
+
+        loss = tf.keras.metrics.Mean()
+        for x in test_x:
+            loss(compute_loss(model, x))
+        elbo = -loss.result()
+        print("Epoch: {}, Test set ELBO: {}".format(epoch, elbo))
+
+        generate_images(model, epoch, vector_for_generation, "test")
     # TODO: Add commentary so that this is useful for teaching.
