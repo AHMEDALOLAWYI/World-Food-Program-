@@ -16,46 +16,32 @@ from keras.layers.normalization import BatchNormalization
 from keras.regularizers import l2
 import keras.backend as K
 
-def BNConv(nb_filter, nb_row, nb_col, w_decay, subsample=(1, 1), border_mode="same"):
-    def f(input):
-        conv = Convolution2D(nb_filter=nb_filter, nb_row=nb_row, nb_col=nb_col, subsample=subsample,
-                      border_mode=border_mode, activation="relu",
-                      W_regularizer=l2(w_decay) if w_decay else None, init="he_normal")(input)
-        return BatchNormalization(mode=0, axis=1)(conv)
-    return f
 
+def inception_v3(shape_x,shape_y):
 
-def inception_v3(w_decay=None):
-    input = Input(shape=(3, 299, 299))
+   input_img = Input(shape=(shape_x, shape_y, 1))
 
-    conv_1 = BNConv(32, 3, 3, w_decay, subsample=(2, 2), border_mode="valid")(input)
-    conv_2 = BNConv(32, 3, 3, w_decay, border_mode="valid")(conv_1)
-    conv_3 = BNConv(64, 3, 3, w_decay)(conv_2)
-    pool_4 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2), border_mode="valid")(conv_3)
+	### 1st layer
+   layer_1 = Conv2D(10, (1,1), padding='same', activation='relu')(input_img)
+   layer_1 = Conv2D(10, (3,3), padding='same', activation='relu')(layer_1)
 
-    conv_5 = BNConv(80, 1, 1, w_decay)(pool_4)
-    conv_6 = BNConv(192, 3, 3, w_decay, border_mode="valid")(conv_5)
-    pool_7 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2), border_mode="valid")(conv_6)
+### 2nd layer
+   layer_2 = Conv2D(10, (1,1), padding='same', activation='relu')(input_img)
+   layer_2 = Conv2D(10, (5,5), padding='same', activation='relu')(layer_2)
 
-    inception_8 = InceptionFig5(w_decay)(pool_7)
-    inception_9 = InceptionFig5(w_decay)(inception_8)
-    inception_10 = InceptionFig5(w_decay)(inception_9)
+### 3rd layer
+   layer_3 = MaxPooling2D((3,3), strides=(1,1), padding='same')(input_img)
+   layer_3 = Conv2D(10, (1,1), padding='same', activation='relu')(layer_3)
 
-    inception_11 = DimReductionA(w_decay)(inception_10)
+### Concatenate
+   mid_1 = keras.layers.concatenate([layer_1, layer_2, layer_3], axis = 3)
 
-    inception_12 = InceptionFig6(w_decay)(inception_11)
-    inception_13 = InceptionFig6(w_decay)(inception_12)
-    inception_14 = InceptionFig6(w_decay)(inception_13)
-    inception_15 = InceptionFig6(w_decay)(inception_14)
-    inception_16 = InceptionFig6(w_decay)(inception_15)
+   flat_1 = Flatten()(mid_1)
 
-    inception_17 = DimReductionB(w_decay)(inception_16)
+   dense_1 = Dense(1200, activation='relu')(flat_1)
+   dense_2 = Dense(600, activation='relu')(dense_1)
+   dense_3 = Dense(150, activation='relu')(dense_2)
 
-    inception_18 = InceptionFig7(w_decay)(inception_17)
-    inception_19 = InceptionFig7(w_decay)(inception_18)
-
-    pool_20 = Lambda(lambda x: K.mean(x, axis=(2, 3)), output_shape=(2048, ))(inception_19)
-
-    model = Model(input, pool_20)
-
-    return model
+   output = Dense(nClasses, activation='softmax')(dense_3)
+   model = Model([input_img], output)
+   return model
