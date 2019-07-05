@@ -17,7 +17,7 @@ from keras.regularizers import l2
 import keras.backend as K
 
 
-def inception_v3(shape_x,shape_y):
+def inception_v3(shape_x,shape_y,nClasses):
 
    input_img = Input(shape=(shape_x, shape_y, 1))
 
