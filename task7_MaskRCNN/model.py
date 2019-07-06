@@ -7,18 +7,53 @@
 
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras.layers import Dense, Flatten, Conv2D
-from tensorflow.keras import Model
+from tensorflow.python.keras.layers import Dense, Flatten, Conv2D, BatchNormalization, Add, Activation
+from tensorflow.python.keras import Model
+
+data_dir = './images/'
 
 
 # We need to add a lot more to make this work - right now it's just a conventional CNN.
 class MaskRCNN(Model):
     def __init__(self):
         super(MaskRCNN, self).__init__()
-        self.conv = Conv2D(256, 3, activation='relu')
+        self.conv1 = Conv2D(256, (1, 1), use_bias=True, activation='relu')
+        self.conv2 = Conv2D(128, (3, 3), padding='same', use_bias=True)
+        self.conv3 = Conv2D(64, (1, 1), use_bias=True)
+        self.bn_train = BatchNormalization(trainable=True)
+        self.bn_freeze = BatchNormalization(trainable=False)
         self.flatten = Flatten()
-        self.d1 = Dense(128, activation='relu')
-        self.d2 = Dense(10, activation='sigmoid')
+        self.add = Add()
+        self.activation = Activation('relu')
+
+    # Heavy inspiration from Matterport's Mask RCNN implementation.
+    def identity_block(self, input_tensor):
+        x = self.conv1(input_tensor)
+        x = self.bn_train(x, training=train_bn)
+        x = self.activation(x)
+        x = self.conv2(x)
+        x = self.bn_train(x)
+        x = self.activation(x)
+        x = self.conv3(x)
+        x = self.add([x, input_tensor])
+        x = self.activation(x)
+        return x
+
+    def conv_block(self, input_tensor):
+        x = self.conv1(input_tensor)
+        x = self.bn_train(x)
+        x = self.activation(x)
+        x = self.conv2(x)
+        x = self.bn_train(x)
+        x = self.activation(x)
+        x = self.conv3(x)
+        x = self.bn_train(x)
+        shortcut = conv3(input_tensor)
+        shortcut = self.bn_train(shortcut)
+        x = self.add([x, shortcut])
+        x = self.activation(x)
+        return x
+
 
     def call(self, x):
         x = self.conv1(x)
