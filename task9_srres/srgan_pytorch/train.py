@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 
 DEVICE = 'cuda'
-EPOCHS = 5
+EPOCHS = 2000
 TRAIN_BATCH_SIZE = 2
 VALID_BATCH_SIZE = 1
 TRAIN_IMAGES_ROOT = 'data/train'
@@ -27,8 +27,8 @@ LR_DECAY = 0.5
 LR_STEP = 500
 LR_G = 1e-4
 LR_D = 1e-4
-CONTENT_LOSS_WEIGHT = 2e-6
-ADVERSARIAL_LOSS_WEIGHT = 1e-3
+CONTENT_LOSS_WEIGHT = 2e-3
+ADVERSARIAL_LOSS_WEIGHT = 1e-2
 MSE_LOSS_WEIGHT = 1.0
 EXP_NO = 1
 LOAD_CHECKPOINT = None
@@ -163,18 +163,6 @@ def train(G, D, trn_dl, epoch, epochs, content_loss, MSE, adv_loss, opt_G, opt_D
         train_losses.update(content=cont_loss.item(), mse=mse_loss.item(), adversarial=g_adv_loss.item(),
                             generator=g_loss.item(), discriminator=d_loss.item())
 
-        # Cleanup
-        del lr_imgs
-        del hr_imgs
-        del fake_imgs
-        del g_loss
-        del g_adv_loss
-        del mse_loss
-        del cont_loss
-        del d_fake_preds
-        del d_real_preds
-
-
 
 def evaluate(G, D, val_dl, epoch, epochs, content_loss, MSE, adv_loss, val_losses, best_val_loss):
     # Set the nets into evaluation mode
@@ -209,17 +197,6 @@ def evaluate(G, D, val_dl, epoch, epochs, content_loss, MSE, adv_loss, val_losse
         best_val_loss = g_loss.item()
         torch.save(G.state_dict(), f'{WEIGHTS_SAVE_PATH}/{EXP_NO:02d}-G_epoch-{epoch:04d}_total-loss-{avg_val_loss:.3f}.pth')
         torch.save(D.state_dict(), f'{WEIGHTS_SAVE_PATH}/{EXP_NO:02d}-D_epoch-{epoch:04d}_total-loss-{avg_disval_loss:.3f}.pth')
-
-    # Cleanup
-    del lr_imgs
-    del hr_imgs
-    del fake_imgs
-    del g_loss
-    del g_adv_loss
-    del mse_loss
-    del cont_loss
-    del d_fake_preds
-    del d_real_preds
 
     return best_val_loss
 
