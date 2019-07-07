@@ -8,11 +8,12 @@
 
 import tensorflow as tf
 import numpy as np
+import re
 from tensorflow.python.keras.layers import Input, Conv2D, BatchNormalization, Add, Activation, ZeroPadding2D,\
-    MaxPool2D, Lambda, UpSampling2D
+    MaxPool2D, Lambda, UpSampling2D, TimeDistributed, Dense, Reshape
 from tensorflow.python.keras import Model
-import matterport_utils
-from matterport_utils import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
+import task7_MaskRCNN.matterport_utils as mp_utils
+from task7_MaskRCNN.matterport_utils import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
 import os
 
 data_dir = './images/'
@@ -103,22 +104,8 @@ class MaskRCNN(Model):
         self.mode = mode
         self.config = config
         self.model_dir = model_dir
+        self.set_log_dir()
         self.model = self.build(mode=mode, config=config)
-
-    def get_anchors(self, image_shape):
-        backbone_shapes = compute_backbone_shapes(self.config, image_shape)
-        if not hasattr(self, "_anchor_cache"):
-            self._anchor_cache = {}
-        if not tuple(image_shape) in self._anchor_cache:
-            a = matterport_utils.generate_pyramid_anchors(
-                self.config.RPN_ANCHOR_SCALES,
-                self.config.RPN_ANCHOR_RATIOS,
-                backbone_shapes,
-                self.config.BACKBONE_STRIDES,
-                self.config.RPN_ANCHOR_STRIDE)
-            self.anchors = a
-            self._anchor_cache[tuple]
-        return self._anchor_cache[tuple(image_shape)]
 
     def build(self, mode, config):
         h, w = config.IMAGE_SHAPE[:2]
@@ -135,7 +122,7 @@ class MaskRCNN(Model):
             input_gt_class_ids = Input(shape=[None], dtype=tf.int32)
             input_gt_boxes = Input(shape=[None, 4], dtype=tf.float32)
 
-            gt_boxes = Lambda(lambda x: norm_boxes(x, tf.shape(input_image)[1:3]))(input_gt_boxes)
+            gt_boxes = Lambda(lambda x: mp_utils.norm_boxes(x, tf.shape(input_image)[1:3]))(input_gt_boxes)
             input_gt_masks = Input(shape=[config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1], None], dtype=bool)
 
         elif mode == "inference":
@@ -179,7 +166,7 @@ class MaskRCNN(Model):
 
         if mode == "training":
 
-            active_class_ids = Lambda(lambda x: parse_image_meta_graph(x)["active_class_ids"])(input_image_meta)
+            active_class_ids = Lambda(lambda x: mp_utils.parse_image_meta_graph(x)["active_class_ids"])(input_image_meta)
             target_rois = rpn_rois
 
             # noinspection PyUnboundLocalVariable
@@ -207,10 +194,10 @@ class MaskRCNN(Model):
 
             inputs = [input_image, input_image_meta, input_rpn_match, input_rpn_bbox, input_gt_class_ids,
                       input_gt_boxes, input_gt_masks]
-
             outputs = [rpn_class_logits, rpn_class, rpn_bounding_box, mask_rcnn_class_logits, mask_rcnn_class,
                        mask_rcnn_bounding_box, mask_rcnn_mask, rpn_rois, output_rois, rpn_class_loss, rpn_bounding_loss,
                        class_loss, bounding_loss, mask_loss]
+
             model = Model(inputs, outputs)
 
         else:
@@ -238,9 +225,94 @@ class MaskRCNN(Model):
         # Return the last checkpoint in the last directory
         return os.path.join(dir_name, checkpoints[-1])
 
+    def set_log_dir(self, model_path=None):
+        self.epoch = 0
+        now = datetime.datetime.now()
 
+        if model_path:
+            regex = r".*[/\\][\w-]+(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})[/\\]mask\_rcnn\_[\w-]+(\d{4})\.h5"
+            m = re.match(regex, model_path)
+            if m:
+                now = datetime.datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                                        int(m.group(4)), int(m.group(5)))
+                # Epoch number in file is 1-based, and in Keras code it's 0-based.
+                # So, adjust for that then increment by one to start from the next epoch
+                self.epoch = int(m.group(6)) - 1 + 1
+                print('Re-starting from epoch %d' % self.epoch)
 
+            # Directory for training logs
+        self.log_dir = os.path.join(self.model_dir, "{}{:%Y%m%dT%H%M}".format(
+            self.config.NAME.lower(), now))
 
+        # Path to save after each epoch. Include placeholders that get filled by Keras.
+        self.checkpoint_path = os.path.join(self.log_dir, "mask_rcnn_{}_*epoch*.h5".format(
+            self.config.NAME.lower()))
+        self.checkpoint_path = self.checkpoint_path.replace(
+            "*epoch*", "{epoch:04d}")
+
+    def load_weights(self, file_path, by_name=False, exclude=None):
+        import h5py
+        from tensorflow.python.keras import saving
+
+        if exclude:
+            by_name = True
+
+        f = h5py.File(file_path, mode='r')
+        if 'layer_names' not in f.attrs and 'model_weights' in f:
+            f = f['model_weights']
+
+        model = self.model
+        layers = model.inner_model.layers if hasattr(model, "inner_model") else model.layers
+
+        if exclude:
+            layers = filter(lambda l: l.name not in exclude, layers)
+        if by_name:
+            saving.load_weights_from_hdf5_group_by_name(f, layers)
+        else:
+            saving.load_attributes_from_hdf5_group(f, layers)
+        if hasattr(f, 'close'):
+            f.close()
+
+        self.set_log_dir(file_path)
+
+    @staticmethod
+    def compute_backbone_shapes(config, image_shape):
+        return np.array([[int(np.ceil(image_shape[0] / stride)), int(np.ceil(image_shape[1] / stride))]
+                         for stride in config.BACKBONE_STRIDES])
+
+    def get_anchors(self, image_shape):
+        backbone_shapes = self.compute_backbone_shapes(self.config, image_shape)
+        if not hasattr(self, "_anchor_cache"):
+            self._anchor_cache = {}
+        if not tuple(image_shape) in self._anchor_cache:
+            a = mp_utils.generate_pyramid_anchors(
+                self.config.RPN_ANCHOR_SCALES,
+                self.config.RPN_ANCHOR_RATIOS,
+                backbone_shapes,
+                self.config.BACKBONE_STRIDES,
+                self.config.RPN_ANCHOR_STRIDE)
+            self.anchors = a
+            self._anchor_cache[tuple]
+        return self._anchor_cache[tuple(image_shape)]
+
+    def fpn_classifier(self, rois, feature_maps, image_meta, pool_size, num_classes, trainable=None, layer_size=1024):
+        x = PyramidROIAlign([pool_size, pool_size])([rois, image_meta] + feature_maps)
+        x = TimeDistributed(Conv2D(layer_size, (pool_size, pool_size), padding="valid"))(x)
+        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = Activation('relu')(x)
+        x = TimeDistributed(Conv2D(layer_size, (1, 1)))(x)
+        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = Activation('relu')(x)
+        shared = Lambda(lambda x: tf.squeeze(tf.squeeze(x, 3), 2))(x)
+
+        mask_rcnn_class_logits = TimeDistributed(Dense(num_classes))(shared)
+        mask_rcnn_probabilities = TimeDistributed(Activation("softmax"))(mask_rcnn_class_logits)
+
+        x = TimeDistributed(Dense(num_classes * 4, activation='linear'))(shared)
+        s = tf.keras.backend.int_shape(x)
+        mask_rcnn_bounding_box = Reshape((s[1], num_classes, 4))(x)
+
+        return mask_rcnn_class_logits, mask_rcnn_probabilities, mask_rcnn_bounding_box
 
 
 # There is no labeled data yet, so this is more or less just a mock-up. Once we have data, we'll read it in from a
@@ -257,9 +329,10 @@ def split_data(data):
     return None, None, None, None
 
 
-def train_model(images, labels, epochs):
-    model = MaskRCNN()
+def train_model(config, images, labels, epochs):
+    model = MaskRCNN(config)
     # Probably want to use a different loss - but it's fine for now.
+    # TODO: This entire function needs to be reworked to account for all 5 losses
     loss_object = tf.keras.losses.SparseCategoricalCrossentropy()
     train_loss = tf.keras.metrics.Mean(name='training_loss')
     train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
@@ -296,7 +369,7 @@ if __name__ == "__main__":
     path_to_data = None  # TODO: Find the best way to populate this path
     data = ingest_data(path_to_data)
     X_train, X_val, y_train, y_val = split_data(data)
-    model = train_model(X_train, y_train, EPOCHS)
+    model = train_model(config, X_train, y_train, EPOCHS)
     validation_loss, validation_accuracy = validate_model(model, X_val, y_val)
     print('Validation loss: {}, Validation accuracy: {}'.format(
         validation_loss.result(), validation_accuracy.result()*100))
