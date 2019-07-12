@@ -10,11 +10,12 @@ import tensorflow as tf
 import numpy as np
 import re
 from tensorflow.python.keras.layers import Input, Conv2D, BatchNormalization, Add, Activation, ZeroPadding2D,\
-    MaxPool2D, Lambda, UpSampling2D, TimeDistributed, Dense, Reshape
+    MaxPool2D, Lambda, UpSampling2D, TimeDistributed, Dense, Reshape, Conv2DTranspose
 from tensorflow.python.keras import Model
 import task7_MaskRCNN.matterport_utils as mp_utils
 from task7_MaskRCNN.matterport_utils import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
 import os
+import datetime
 
 data_dir = './images/'
 
@@ -83,7 +84,7 @@ class Backbone(Model):
         x = self.identity_block(x, 3, [128, 128, 512], trainable=trainable)
         C3 = x = self.identity_block(x, 3, [128, 128, 512], trainable=trainable)
         x = self.conv_block(x, 3, [256, 256, 1024], trainable=trainable)
-        # Per Matterport implementation, if we wanted to change this to resnet 101, we'd have 22 instead of 5 blocks
+        # If we wanted to change this to resnet 101, we'd have 22 instead of 5 blocks between here and C4
         x = self.identity_block(x, 3, [256, 256, 1024], trainable=trainable)
         x = self.identity_block(x, 3, [256, 256, 1024], trainable=trainable)
         x = self.identity_block(x, 3, [256, 256, 1024], trainable=trainable)
@@ -104,21 +105,33 @@ class MaskRCNN(Model):
         self.mode = mode
         self.config = config
         self.model_dir = model_dir
+        self._anchor_cache = None
+        self.anchors = None
+        self.epoch = 0
+        self.checkpoint_path = None
+        self.log_dir = None
         self.set_log_dir()
         self.model = self.build(mode=mode, config=config)
 
     def build(self, mode, config):
+        """ Build is called in __init__ for the MaskRCNN model. It does some checking on the images to ensure that they
+        have an appropriate dimension.
+        Given appropriate images, it will generate the Mask R-CNN architecture."""
         h, w = config.IMAGE_SHAPE[:2]
         if h/2**6 != int(h/2**6) or w/2**6 != int(w/2**6):
             raise Exception("Image size must be a multiple of 64 to allow up and downscaling")
+
         input_image = Input(shape=[None, None, config.IMAGE_SHAPE[2]])
         input_image_meta = Input(shape=[config.IMAGE_META_SIZE])
 
+        # First, we want to consider whether we're in training mode or inference mode. IF we're in training mode,
+        # we need to build Input layers that we'll feed to the model, which includes all of the class IDs, Bounding
+        # Boxes for the region proposal network.
         if mode == "training":
             input_rpn_match = Input(shape=[None, 1], dtype=tf.int32)
             input_rpn_bbox = Input(shape=[None, 4], dtype=tf.float32)
 
-            # We're not *super* concerned with class id, but it's included.
+            # We're not *super* concerned with class id in the WFP use case, but it's included.
             input_gt_class_ids = Input(shape=[None], dtype=tf.int32)
             input_gt_boxes = Input(shape=[None, 4], dtype=tf.float32)
 
@@ -128,9 +141,13 @@ class MaskRCNN(Model):
         elif mode == "inference":
             input_anchors = Input(shape=[None, 4])
 
-        resnet = Backbone()
-        _, C2, C3, C4, C5 = resnet.resnet50(input_image, trainable=config.TRAINABLE)
+        # Once we have our inputs set up, we need to build our backbone model. This will convert it from a standard
+        # image (RGB or NVDI) - 13 channels is preferable, but it's an easy modification.
+        backbone_model = Backbone()
+        _, C2, C3, C4, C5 = backbone_model.resnet50(input_image, trainable=config.TRAINABLE)
 
+        # We then use the output of the ResNet model to construct the Feature Pyramid Network.
+        # The feature pyramid network is used to represent single objects at multiple scales.
         P5 = Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1))(C5)
         P4 = Add()([UpSampling2D(size=(2, 2))(P5), Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1))(C4)])
         P3 = Add()([UpSampling2D(size=(2, 2))(P4), Conv2D(config.TOP_DOWN_PYRAMID_SIZE, (1, 1))(C3)])
@@ -150,7 +167,11 @@ class MaskRCNN(Model):
         else:
             anchors = input_anchors
 
-        rpn = build_rpn(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), config.TOP_DOWN_PYRAMID_SIZE)
+        # Using the anchors pulled from above, we build our region proposal network.
+        # The region proposal network (RPN) scans the image like sliding a small window across the whole image to find
+        # areas that contain the objects in question. We call these areas "anchors" and there are thousands of them
+        # which overlap to cover the entire image.
+        rpn = self.build_rpn_model(config.RPN_ANCHOR_STRIDE, len(config.RPN_ANCHOR_RATIOS), config.TOP_DOWN_PYRAMID_SIZE)
         layer_outputs = []
         for p in rpn_feature_maps:
             layer_outputs.append(rpn([p]))
@@ -160,6 +181,10 @@ class MaskRCNN(Model):
 
         rpn_class_logits, rpn_class, rpn_bounding_box = outputs
 
+        # The ProposalLayer here is a custom Keras layer (written by MatterPort) which reads the output of our
+        # region proposal network, picks the top anchors, and adjusts the size of the bounding box based on whether
+        # the anchor identified is in the foreground or the background of the image and how much the RPN
+        # estimates the size of the object to be off by. This identifies our regions of interest (ROIs).
         proposal_count = config.POST_NMS_ROIS_TRAINING if mode == "training" else config.POST_NMS_ROIS_INFERENCE
         rpn_rois = ProposalLayer(proposal_count=proposal_count, nms_threshold=config.RPN_NMS_THRESHOLD, config=config)\
             ([rpn_class, rpn_bounding_box, anchors])
@@ -173,25 +198,36 @@ class MaskRCNN(Model):
             rois, target_class_ids, target_bounding_box, target_mask = DetectionTargetLayer(config)\
                 ([target_rois, input_gt_class_ids, gt_boxes, input_gt_masks])
 
+            # The feature proposal network classifier looks at the regions of interest proposed by the region proposal
+            # network and generates a class for the object (which we only have 2 at the time, but if we add more crops
+            # in the future, these are the classes which will need to be changed.) and a bounding box refinement to
+            # narrow down the size of the bounding box.
+            # This is also where region of interest pooling occurs. This is critical to do because classifiers are not
+            # intended to deal with variable input size. Since ROI boxes can have different sizes coming out of the RPN,
+            # we "crop" the feature map and set it to a fixed size.
+            # We sample the feature map at different points and apply a bilinear interpolation
             mask_rcnn_class_logits, mask_rcnn_class, mask_rcnn_bounding_box = \
-                fpn_classifier(rois, mask_rcnn_feature_maps, input_image_meta, config.POOL_SIZE, config.NUM_CLASSES,
-                               trainable=config.TRAINABLE, fc_layers_size=config.FPN_FC_LAYERS_SIZE)
+                self.fpn_classifier(rois, mask_rcnn_feature_maps, input_image_meta, config.POOL_SIZE,
+                                    config.NUM_CLASSES, trainable=config.TRAINABLE,
+                                    layer_size=config.FPN_FC_LAYERS_SIZE)
 
-            mask_rcnn_mask = build_fpn_mask(rois, mask_rcnn_feature_maps, input_image_meta, config.MASK_POOL_SIZE,
-                                            config.NUM_CLASSES, trainable=config.TRAINABLE)
+            mask_rcnn_mask = self.build_fpn_mask(rois, mask_rcnn_feature_maps, input_image_meta,
+                                                 config.MASK_POOL_SIZE, config.NUM_CLASSES, trainable=config.TRAINABLE)
 
             output_rois = tf.identity(rois)
 
+            # Once we have our ROIs, masks, and and so on, we need to identify our losses, which are Lambda layers
             # noinspection PyUnboundLocalVariable
-            rpn_class_loss = Lambda(lambda x: calculate_rpn_class_loss(*x))([input_rpn_match, rpn_class_logits])
-            rpn_bounding_loss = Lambda(lambda x: calculate_rpn_bounding_loss(config, *x))\
+            rpn_class_loss = Lambda(lambda x: self.calculate_rpn_class_loss(*x))([input_rpn_match, rpn_class_logits])
+            rpn_bounding_loss = Lambda(lambda x: self.calculate_rpn_bounding_loss(config, *x))\
                 ([input_rpn_bbox, input_rpn_match, rpn_bounding_box])
-            class_loss = Lambda(lambda x: mask_rcnn_class_loss(*x))\
+            class_loss = Lambda(lambda x: self.mask_rcnn_class_loss(*x))\
                 ([target_class_ids, mask_rcnn_class_logits, active_class_ids])
-            bounding_loss = Lambda(lambda x: mask_rcnn_bounding_loss(*x))\
-                ([target_bounding_box, target_class_ids, mask_rcnn_bounding_box])
-            mask_loss = Lambda(lambda x: mask_rcnn_mask_loss(*x))([target_mask, target_class_ids, mask_rcnn_mask])
+            bounding_loss = Lambda(lambda x: self.mask_rcnn_bounding_loss(*x))\
+                ([target_bounding_box, self.target_class_ids, mask_rcnn_bounding_box])
+            mask_loss = Lambda(lambda x: self.mask_rcnn_mask_loss(*x))([target_mask, target_class_ids, mask_rcnn_mask])
 
+            # Finally, we use the inputs and outputs we've built to construct a model.
             inputs = [input_image, input_image_meta, input_rpn_match, input_rpn_bbox, input_gt_class_ids,
                       input_gt_boxes, input_gt_masks]
             outputs = [rpn_class_logits, rpn_class, rpn_bounding_box, mask_rcnn_class_logits, mask_rcnn_class,
@@ -201,18 +237,23 @@ class MaskRCNN(Model):
             model = Model(inputs, outputs)
 
         else:
+            # In inference mode, we still build the fpn classifier and return a model with all of the inputs and outputs
+            # but we don't need all of the extra stuff (like losses)
             mask_rcnn_class_logits, mask_rcnn_class, mask_rcnn_bounding_box = \
-                fpn_classifier(rpn_rois, mask_rcnn_feature_maps, input_image_meta, config.POOL_SIZE, config.NUM_CLASSES,
-                               trainable=config.TRAINABLE, fc_layers_size=config.FPN_FC_LAYERS_SIZE)
+                self.fpn_classifier(rpn_rois, mask_rcnn_feature_maps, input_image_meta, config.POOL_SIZE,
+                                    config.NUM_CLASSES, trainable=config.TRAINABLE,
+                                    layer_size=config.FPN_FC_LAYERS_SIZE)
             detections = DetectionLayer(config)([rpn_rois, mask_rcnn_class, mask_rcnn_bounding_box, input_image_meta])
             detection_boxes = Lambda(lambda x: x[..., :4])(detections)
-            mask_rcnn_mask = build_fpn_mask(detection_boxes, mask_rcnn_feature_maps, input_image_meta,
-                                            config.MASK_POOL_SIZE, config.NUM_CLASSES, trainable=config.TRAINABLE)
+            mask_rcnn_mask = self.build_fpn_mask(detection_boxes, mask_rcnn_feature_maps, input_image_meta,
+                                                 config.MASK_POOL_SIZE, config.NUM_CLASSES, trainable=config.TRAINABLE)
             model = Model([input_image, input_image_meta, input_anchors], [detections, mask_rcnn_class,
                                                                            mask_rcnn_bounding_box, mask_rcnn_mask,
                                                                            rpn_rois, rpn_class, rpn_bounding_box])
 
         return model
+
+    # TODO: Define losses internally since we have so many.
 
     def find_last_checkpoint(self):
         key = self.config.NAME.lower()
@@ -292,12 +333,13 @@ class MaskRCNN(Model):
                 self.config.BACKBONE_STRIDES,
                 self.config.RPN_ANCHOR_STRIDE)
             self.anchors = a
-            self._anchor_cache[tuple]
+            self._anchor_cache[tuple(image_shape)] = mp_utils.norm_boxes(a, image_shape[:2])
         return self._anchor_cache[tuple(image_shape)]
 
-    def fpn_classifier(self, rois, feature_maps, image_meta, pool_size, num_classes, trainable=None, layer_size=1024):
+    @staticmethod
+    def fpn_classifier(rois, feature_maps, image_meta, pool_size, num_classes, trainable=None, layer_size=1024):
         x = PyramidROIAlign([pool_size, pool_size])([rois, image_meta] + feature_maps)
-        x = TimeDistributed(Conv2D(layer_size, (pool_size, pool_size), padding="valid"))(x)
+        x = TimeDistributed(Conv2D(layer_size, (pool_size, pool_size), padding="VALID"))(x)
         x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
         x = Activation('relu')(x)
         x = TimeDistributed(Conv2D(layer_size, (1, 1)))(x)
@@ -313,6 +355,65 @@ class MaskRCNN(Model):
         mask_rcnn_bounding_box = Reshape((s[1], num_classes, 4))(x)
 
         return mask_rcnn_class_logits, mask_rcnn_probabilities, mask_rcnn_bounding_box
+
+    @staticmethod
+    def build_fpn_mask(rois, feature_maps, image_meta, pool_size, num_classes, trainable=None):
+        # Start with ROI pooling
+        x = PyramidROIAlign([pool_size, pool_size])([rois, image_meta] + feature_maps)
+        # 4 normal conv layers, a deconv, and a conv with sigmoid.
+        x = TimeDistributed(Conv2D(256, (3, 3), padding="SAME"))(x)
+        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = Activation('relu')(x)
+        x = TimeDistributed(Conv2D(256, (3, 3), padding="SAME"))(x)
+        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = Activation('relu')(x)
+        x = TimeDistributed(Conv2D(256, (3, 3), padding="SAME"))(x)
+        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = Activation('relu')(x)
+        x = TimeDistributed(Conv2D(256, (3, 3), padding="SAME"))(x)
+        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = Activation('relu')(x)
+        x = TimeDistributed(Conv2DTranspose(256, (2, 2), strides=2, activation="relu"))(x)
+        x = TimeDistributed(Conv2D(num_classes, (1, 1), strides=1, activation="sigmoid"))(x)
+        return x
+
+
+    @staticmethod
+    def build_rpn_model(anchor_stride, anchors_per_location, depth):
+        input_feature_map = Input(shape=[None, None, depth])
+
+        shared = Conv2D(512, (3, 3), padding='same', activation='relu', strides=anchor_stride)(input_feature_map)
+        x = Conv2D(2 * anchors_per_location, (1, 1), padding='VALID', activation='linear')(shared)
+        rpn_class_logits = Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 2]))(x)
+        rpn_probabilities = Activation("softmax")(rpn_class_logits)
+
+        x = Conv2D(anchors_per_location * 4, (1, 1), padding="VALID", activation='linear')(shared)
+        rpn_bounding_box = Lambda(lambda t: tf.reshape(t, [tf.shape(t)[0], -1, 4]))(x)
+
+        outputs = [rpn_class_logits, rpn_probabilities, rpn_bounding_box]
+
+        return Model([input_feature_map], outputs)
+
+    def train(self, x_train, y_train, validation_data, learning_rate, epochs):
+        """ Train the Mask R-CNN model on the provided training and validation data sets using the model.fit method"""
+        assert self.mode == "training", "Model must be in training mode"
+
+        if not os.path.exists(self.log_dir):
+            os.makedirs(self.log_dir)
+
+        print(f"Starting to train! Learning rate is {learning_rate}")
+        print(f"Path to checkpoints is: {self.checkpoint_path}")
+
+        callbacks = [tf.python.keras.callbacks.ModelCheckpoint(self.checkpoint_path, verbose=0, save_weights_only=True),
+                     tf.python.keras.callbacks.TensorBoard(log_dir=self.log_dir, histogram_freq=0, write_graph=True,
+                                                           write_images=False)]
+
+        self.model.fit(x=x_train, y=y_train, epochs=epochs, callbacks=callbacks, validation_data=validation_data)
+        self.epoch = max(self.epoch, epochs)
+
+    def detect(self, images):
+        assert self.mode == "inference", "Model must be in inference mode"
+        assert len(images) == self.config.BATCH_SIZE, "Number of images must be equal to BATCH_SIZE"
 
 
 # There is no labeled data yet, so this is more or less just a mock-up. Once we have data, we'll read it in from a
