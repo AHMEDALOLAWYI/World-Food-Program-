@@ -30,7 +30,7 @@ class VATLoss(nn.Module):
             ys = model(unlab_xs)
 
             if logits:
-                ys = F.log_softmax(ys, dim=1)
+                ys = F.softmax(ys, dim=1)
 
         # Generate a random vector, convert it to a unit vector
         d = torch.rand(unlab_xs.shape).sub(0.5).to(unlab_xs.device)

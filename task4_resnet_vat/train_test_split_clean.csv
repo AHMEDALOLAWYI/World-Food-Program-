@@ -72,7 +72,6 @@ id,fname,is_val_set
 70,other_Feb17_85-73732758_27-54277424_img_0.png,False
 71,rice_Jan17_84-38450859_27-59083006_img_0.png,True
 72,other_Nov16_84-53956657_27-61370183_img_1.png,False
-73,other_Nov16_84-58672431_27-60864103_img_4.png,False
 74,rice_Oct16_84-341072_27-62357127_img_1.png,True
 75,other_Nov16_84-58531665_27-59969224_img_2.png,True
 76,other_Aug16_84-41378888_27-63863831_img_0.png,True
@@ -1608,7 +1607,6 @@ id,fname,is_val_set
 1606,other_Feb17_84-28731738_27-42719899_img_0.png,False
 1607,rice_Jan17_84-37797779_27-59128782_img_0.png,False
 1608,other_Dec16_85-50138063_27-39131448_img_2.png,False
-1609,rice_Jan17_84-56690701_27-59039691_img_0.png,False
 1610,rice_Mar17_84-60997752_27-63294678_img_1.png,False
 1611,rice_Nov16_84-36923837_27-59697654_img_3.png,False
 1612,other_Oct16_84-4995836_27-65221702_img_0.png,False
@@ -2042,7 +2040,6 @@ id,fname,is_val_set
 2040,other_Oct16_84-33193485_27-45957092_img_3.png,False
 2041,other_Aug16_84-28475166_27-47223916_img_1.png,False
 2042,other_Nov16_84-26737574_27-6206615_img_3 (1).png,False
-2043,rice_Oct16_84-6029994_27-5858155_img_3.png,False
 2044,other_Oct16_84-49275836_27-66115468_img_2.png,False
 2045,rice_Aug16_84-56594383_27-6307865_img_2.png,False
 2046,other_Feb17_85-72395935_27-54350697_img_2.png,True
@@ -2453,7 +2450,6 @@ id,fname,is_val_set
 2451,rice_Mar16_84-22118735_27-58062951_img_0.png,False
 2452,rice_Oct16_84-60077999_27-58635454_img_1.png,True
 2453,other_Oct16_84-31389505_27-58110548_img_3.png,False
-2454,other_Nov16_84-58672431_27-60864103_img_5.png,False
 2455,other_Feb17_84-33603317_27-43843619_img_0.png,True
 2456,rice_Nov16_84-27654487_27-60281297_img_0.png,False
 2457,other_Jan17_84-68484723_27-68245672_img_0.png,False
@@ -3598,7 +3594,6 @@ id,fname,is_val_set
 3596,rice_Oct16_84-30301967_27-61387627_img_3.png,False
 3597,other_Nov16_84-71327081_27-61974777_img_2.png,False
 3598,rice_Aug16_84-39481132_27-59606124_img_0.png,False
-3599,other_Feb17_84-56986216_27-68644744_img_0.png,False
 3600,other_Dec16_85-67799015_27-37953826_img_3.png,True
 3601,other_Jan17_85-59065579_27-40130968_img_2.png,False
 3602,other_Oct16_84-43223936_27-65093397_img_1.png,False
@@ -5794,7 +5789,6 @@ id,fname,is_val_set
 5792,rice_Oct16_84-40268786_27-61571885_img_0.png,False
 5793,other_Dec16_85-61981253_27-47323578_img_1.png,False
 5794,other_Aug16_84-53957614_27-67691481_img_0.png,True
-5795,rice_Oct16_84-6029994_27-5858155_img_2.png,False
 5796,rice_Jan17_84-5518823_27-58103768_img_0.png,True
 5797,rice_Aug16_84-52601691_27-60440813_img_0.png,False
 5798,other_Mar17_84-57799045_27-70772576_img_1.png,False
@@ -9385,7 +9379,6 @@ id,fname,is_val_set
 9384,rice_Oct16_84-276079_27-47660431_img_3.png,False
 9385,wheat_Nov16_85-80621341_27-5942076_img_1.png,False
 9386,other_Oct16_84-30096328_27-63626584_img_0.png,False
-9387,rice_Jan17_84-35285055_27-64618413_img_0.png,False
 9388,other_Jan17_85-67691051_27-38101226_img_2.png,False
 9389,rice_Mar17_85-51894358_27-59008946_img_0.png,False
 9390,rice_Dec16_84-3211906_27-63552992_img_0.png,False
@@ -10159,7 +10152,6 @@ id,fname,is_val_set
 10159,other_Oct16_84-50814441_27-65375453_img_1.png,False
 10160,other_Mar17_84-21484201_27-56436728_img_0.png,False
 10161,other_Oct16_84-31393698_27-58245339_img_0.png,False
-10162,other_Oct16_84-28139603_27-60750214_img_1.png,False
 10163,other_Aug16_84-26560439_27-62102294_img_2.png,False
 10164,other_Oct16_84-53300924_27-67216292_img_3.png,False
 10165,other_Feb17_85-7713851_27-53873982_img_0.png,True
@@ -10609,7 +10601,6 @@ id,fname,is_val_set
 10609,other_Nov16_84-27995037_27-46755415_img_4.png,False
 10610,other_Dec16_85-59225071_27-40133829_img_2.png,False
 10611,other_Feb17_85-55084592_27-53269854_img_1.png,True
-10612,other_Oct16_84-56438647_27-63208234_img_0.png,False
 10613,rice_Feb17_84-31706502_27-45031538_img_0.png,True
 10614,other_Jan17_85-71292519_27-43964169_img_0.png,False
 10615,rice_Nov16_84-6169363_27-5789207_img_0.png,True

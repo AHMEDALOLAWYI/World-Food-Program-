@@ -1,9 +1,9 @@
 from torch import nn
-import torch.nn.functional as F
 
 
 class Resnet(nn.Module):
     def __init__(self, arch, num_classes):
+        super().__init__()
         resnet = arch(pretrained=True)
         self.backbone = nn.Sequential(*list(resnet.children())[:-1])
         self.fc1 = nn.Linear(2048, 1024)
@@ -15,7 +15,7 @@ class Resnet(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.lrelu(self.fc1(x))
         x = self.fc2(x)
-        return F.log_softmax(x)
+        return x
 
 
 class EfficientNet(nn.Module):

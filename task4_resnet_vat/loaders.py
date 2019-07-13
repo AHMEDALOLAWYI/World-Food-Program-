@@ -12,14 +12,12 @@ def load_image(image_path):
 
 
 class SatClassificationDataset(Dataset):
-    def __init__(self, img_dir, split_csv, positive_class, is_val,
-                 smoothing_factor=None, tfms=None):
+    def __init__(self, img_dir, split_csv, positive_class, is_val, tfms=None):
         df = pd.read_csv(split_csv)
         df['label'] = df['fname'].apply(lambda x: int(x.startswith(positive_class)))
         self.subset = df[df['is_val_set'] == is_val]
         self.img_names = df['fname'].values
         self.labels = df['label'].values
-        self.smoothing_factor = smoothing_factor
         self.img_dir = img_dir
         self.tfms = tfms
 
@@ -38,14 +36,14 @@ class UnlabeledDataset(Dataset):
         self.root = root
         self.fnames = os.listdir(self.root)
         self.tfms = transforms.Compose([
-            transforms.RandomChoice([transforms.Resize(size),   # High quality full image
-                                     transforms.RandomCrop(size), # High quality random patch
+            transforms.RandomChoice([transforms.Resize((size, size)),   # High quality full image
+                                     transforms.RandomCrop((size, size)), # High quality random patch
                                      transforms.Compose(
-                                         [transforms.Resize(size // 2, interpolation=Image.BILINEAR),
-                                          transforms.Resize(size, interpolation=Image.NEAREST)]), # Low quality full image
+                                         [transforms.Resize((size // 2, size // 2), interpolation=Image.BILINEAR),
+                                          transforms.Resize((size, size), interpolation=Image.NEAREST)]), # Low quality full image
                                      transforms.Compose(
-                                         [transforms.RandomCrop(size // 2),
-                                          transforms.Resize(size, interpolation=Image.NEAREST)])  # Low quality random patch
+                                         [transforms.RandomCrop((size // 2, size // 2)),
+                                          transforms.Resize((size, size), interpolation=Image.NEAREST)])  # Low quality random patch
                                      ]),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
