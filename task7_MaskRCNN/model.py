@@ -9,11 +9,11 @@
 import tensorflow as tf
 import numpy as np
 import re
-from tensorflow.python.keras.layers import Input, Conv2D, BatchNormalization, Add, Activation, ZeroPadding2D,\
+from tensorflow.keras.layers import Input, Conv2D, BatchNormalization, Add, Activation, ZeroPadding2D,\
     MaxPool2D, Lambda, UpSampling2D, TimeDistributed, Dense, Reshape, Conv2DTranspose
-from tensorflow.python.keras import Model
-import task7_MaskRCNN.matterport_utils as mp_utils
-from task7_MaskRCNN.matterport_utils import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
+from tensorflow.keras import Model
+import matterport_utils as mp_utils
+from matterport_utils import DetectionLayer, DetectionTargetLayer, ProposalLayer, PyramidROIAlign
 import os
 import datetime
 
@@ -33,67 +33,67 @@ class Backbone(Model):
     def __init__(self):
         super(Backbone, self).__init__()
         self.conv_1 = Conv2D(64, (7, 7), strides=(2, 2), use_bias=True)
-        self.batchnorm = BatchNormalization(trainable=True)
+        self.batchnorm = BatchNormalization(trainable=False)
         self.maxpool = MaxPool2D((3, 3), strides=(2, 2), padding="same")
         self.zero_pad = ZeroPadding2D((3,3))
         self.activation = Activation('relu')
 
     @staticmethod
-    def conv_block(input_tensor, kernel_size, filters, use_bias=True, trainable=None):
+    def conv_block(input_tensor, kernel_size, filters, use_bias=True, training=None):
         filter1, filter2, filter3 = filters
         x = Conv2D(filter1, (1, 1), strides=(2, 2), use_bias=use_bias)(input_tensor)
-        x = BatchNormalization()(x, trainable=trainable)
+        x = BatchNormalization()(x, training=training)
         x = Activation('relu')(x)
         x = Conv2D(filter2, (kernel_size, kernel_size), padding='same', use_bias=use_bias)(x)
-        x = BatchNormalization()(x, trainable=trainable)
+        x = BatchNormalization()(x, training=training)
         x = Activation('relu')(x)
         x = Conv2D(filter3, (1, 1), use_bias=use_bias)(x)
-        x = BatchNormalization()(x, trainable=trainable)
+        x = BatchNormalization()(x, training=training)
         shortcut = Conv2D(filter3, (1, 1), strides=(2, 2), use_bias=True)(input_tensor)
-        shortcut = BatchNormalization()(shortcut, trainable=trainable)
+        shortcut = BatchNormalization()(shortcut, training=training)
         x = Add()([x, shortcut])
         x = Activation('relu')(x)
         return x
 
     @staticmethod
-    def identity_block(input_tensor, kernel_size, filters, use_bias=True, trainable=None):
+    def identity_block(input_tensor, kernel_size, filters, use_bias=True, training=None):
         filter1, filter2, filter3 = filters
         x = Conv2D(filter1, (1, 1), use_bias=use_bias)(input_tensor)
-        x = BatchNormalization()(x, trainable=trainable)
+        x = BatchNormalization()(x, training=training)
         x = Activation('relu')(x)
         x = Conv2D(filter2, (kernel_size, kernel_size), padding='same', use_bias=True)(x)
-        x = BatchNormalization()(x, trainable=trainable)
+        x = BatchNormalization()(x, training=training)
         x = Activation('relu')(x)
         x = Conv2D(filter3, (1, 1), use_bias=True)(x)
-        x = BatchNormalization()(x, trainable=trainable)
+        x = BatchNormalization()(x, training=training)
         x = Add()([x, input_tensor])
         x = Activation('relu')(x)
         return x
 
-    def resnet_50(self, input_image, trainable=None):
+    def resnet50(self, input_image, training=None):
         x = self.zero_pad(input_image)
         x = self.conv_1(x)
         x = self.batchnorm(x)
         x = self.activation(x)
         C1 = x = self.maxpool(x)
-        x = self.conv_block(x, 3, [64, 64, 256], trainable=trainable)
-        x = self.identity_block(x, 3, [64, 64, 256], trainable=trainable)
-        C2 = x = self.identity_block(x, 3, [64, 64, 256], trainable=trainable)
-        x = self.conv_block(x, 3, [128, 128, 512], trainable=trainable)
-        x = self.identity_block(x, 3, [128, 128, 512], trainable=trainable)
-        x = self.identity_block(x, 3, [128, 128, 512], trainable=trainable)
-        C3 = x = self.identity_block(x, 3, [128, 128, 512], trainable=trainable)
-        x = self.conv_block(x, 3, [256, 256, 1024], trainable=trainable)
+        x = self.conv_block(x, 3, [64, 64, 256], training=training)
+        x = self.identity_block(x, 3, [64, 64, 256], training=training)
+        C2 = x = self.identity_block(x, 3, [64, 64, 256], training=training)
+        x = self.conv_block(x, 3, [128, 128, 512], training=training)
+        x = self.identity_block(x, 3, [128, 128, 512], training=training)
+        x = self.identity_block(x, 3, [128, 128, 512], training=training)
+        C3 = x = self.identity_block(x, 3, [128, 128, 512], training=training)
+        x = self.conv_block(x, 3, [256, 256, 1024], training=training)
         # If we wanted to change this to resnet 101, we'd have 22 instead of 5 blocks between here and C4
-        x = self.identity_block(x, 3, [256, 256, 1024], trainable=trainable)
-        x = self.identity_block(x, 3, [256, 256, 1024], trainable=trainable)
-        x = self.identity_block(x, 3, [256, 256, 1024], trainable=trainable)
-        x = self.identity_block(x, 3, [256, 256, 1024], trainable=trainable)
-        x = self.identity_block(x, 3, [256, 256, 1024], trainable=trainable)
+        x = self.identity_block(x, 3, [256, 256, 1024], training=training)
+        x = self.identity_block(x, 3, [256, 256, 1024], training=training)
+        x = self.identity_block(x, 3, [256, 256, 1024], training=training)
+        x = self.identity_block(x, 3, [256, 256, 1024], training=training)
+        x = self.identity_block(x, 3, [256, 256, 1024], training=training)
         C4 = x
-        x = self.conv_block(x, 3, [512, 512, 2048], trainable=trainable)
-        x = self.identity_block(x, 3, [512, 512, 2048], trainable=trainable)
-        C5 = self.identity_block(x, 3, [512, 512, 2048], trainable=trainable)
+        x = self.conv_block(x, 3, [512, 512, 2048], training=training)
+        x = self.identity_block(x, 3, [512, 512, 2048], training=training)
+        C5 = self.identity_block(x, 3, [512, 512, 2048], training=training)
         return [C1, C2, C3, C4, C5]
 
 
@@ -144,7 +144,7 @@ class MaskRCNN(Model):
         # Once we have our inputs set up, we need to build our backbone model. This will convert it from a standard
         # image (RGB or NVDI) - 13 channels is preferable, but it's an easy modification.
         backbone_model = Backbone()
-        _, C2, C3, C4, C5 = backbone_model.resnet50(input_image, trainable=config.TRAINABLE)
+        _, C2, C3, C4, C5 = backbone_model.resnet50(input_image, training=config.TRAINABLE)
 
         # We then use the output of the ResNet model to construct the Feature Pyramid Network.
         # The feature pyramid network is used to represent single objects at multiple scales.
@@ -163,7 +163,6 @@ class MaskRCNN(Model):
 
         if mode == "training":
             anchors = self.get_anchors(config.IMAGE_SHAPE)
-            anchors = np.broadcast_to(anchors, (config.BATCH_SIZE, ) + anchors.shape)
         else:
             anchors = input_anchors
 
@@ -177,7 +176,7 @@ class MaskRCNN(Model):
             layer_outputs.append(rpn([p]))
         output_names = ["rpn_class_logits", "rpn_class", "rpn_bounding_box"]
         outputs = list(zip(*layer_outputs))
-        outputs = [tf.python.keras.layers.Concatenate(axis=1, name=n)(list(o)) for o, n in zip(outputs, output_names)]
+        outputs = [tf.keras.layers.Concatenate(axis=1, name=n)(list(o)) for o, n in zip(outputs, output_names)]
 
         rpn_class_logits, rpn_class, rpn_bounding_box = outputs
 
@@ -208,24 +207,24 @@ class MaskRCNN(Model):
             # We sample the feature map at different points and apply a bilinear interpolation
             mask_rcnn_class_logits, mask_rcnn_class, mask_rcnn_bounding_box = \
                 self.fpn_classifier(rois, mask_rcnn_feature_maps, input_image_meta, config.POOL_SIZE,
-                                    config.NUM_CLASSES, trainable=config.TRAINABLE,
+                                    config.NUM_CLASSES, training=config.TRAINABLE,
                                     layer_size=config.FPN_FC_LAYERS_SIZE)
 
             mask_rcnn_mask = self.build_fpn_mask(rois, mask_rcnn_feature_maps, input_image_meta,
-                                                 config.MASK_POOL_SIZE, config.NUM_CLASSES, trainable=config.TRAINABLE)
+                                                 config.MASK_POOL_SIZE, config.NUM_CLASSES, training=config.TRAINABLE)
 
             output_rois = tf.identity(rois)
 
             # Once we have our ROIs, masks, and and so on, we need to identify our losses, which are Lambda layers
             # noinspection PyUnboundLocalVariable
-            rpn_class_loss = Lambda(lambda x: self.calculate_rpn_class_loss(*x))([input_rpn_match, rpn_class_logits])
-            rpn_bounding_loss = Lambda(lambda x: self.calculate_rpn_bounding_loss(config, *x))\
+            rpn_class_loss = Lambda(lambda x: mp_utils.calculate_rpn_class_loss(*x))([input_rpn_match, rpn_class_logits])
+            rpn_bounding_loss = Lambda(lambda x: mp_utils.calculate_rpn_bounding_loss(config, *x))\
                 ([input_rpn_bbox, input_rpn_match, rpn_bounding_box])
-            class_loss = Lambda(lambda x: self.mask_rcnn_class_loss(*x))\
+            class_loss = Lambda(lambda x: mp_utils.mask_rcnn_class_loss(*x))\
                 ([target_class_ids, mask_rcnn_class_logits, active_class_ids])
-            bounding_loss = Lambda(lambda x: self.mask_rcnn_bounding_loss(*x))\
-                ([target_bounding_box, self.target_class_ids, mask_rcnn_bounding_box])
-            mask_loss = Lambda(lambda x: self.mask_rcnn_mask_loss(*x))([target_mask, target_class_ids, mask_rcnn_mask])
+            bounding_loss = Lambda(lambda x: mp_utils.mask_rcnn_bounding_loss(*x))\
+                ([target_bounding_box, target_class_ids, mask_rcnn_bounding_box])
+            mask_loss = Lambda(lambda x: mp_utils.mask_rcnn_mask_loss(*x))([target_mask, target_class_ids, mask_rcnn_mask])
 
             # Finally, we use the inputs and outputs we've built to construct a model.
             inputs = [input_image, input_image_meta, input_rpn_match, input_rpn_bbox, input_gt_class_ids,
@@ -241,12 +240,12 @@ class MaskRCNN(Model):
             # but we don't need all of the extra stuff (like losses)
             mask_rcnn_class_logits, mask_rcnn_class, mask_rcnn_bounding_box = \
                 self.fpn_classifier(rpn_rois, mask_rcnn_feature_maps, input_image_meta, config.POOL_SIZE,
-                                    config.NUM_CLASSES, trainable=config.TRAINABLE,
+                                    config.NUM_CLASSES, training=config.TRAINABLE,
                                     layer_size=config.FPN_FC_LAYERS_SIZE)
             detections = DetectionLayer(config)([rpn_rois, mask_rcnn_class, mask_rcnn_bounding_box, input_image_meta])
             detection_boxes = Lambda(lambda x: x[..., :4])(detections)
             mask_rcnn_mask = self.build_fpn_mask(detection_boxes, mask_rcnn_feature_maps, input_image_meta,
-                                                 config.MASK_POOL_SIZE, config.NUM_CLASSES, trainable=config.TRAINABLE)
+                                                 config.MASK_POOL_SIZE, config.NUM_CLASSES, training=config.TRAINABLE)
             model = Model([input_image, input_image_meta, input_anchors], [detections, mask_rcnn_class,
                                                                            mask_rcnn_bounding_box, mask_rcnn_mask,
                                                                            rpn_rois, rpn_class, rpn_bounding_box])
@@ -293,7 +292,7 @@ class MaskRCNN(Model):
 
     def load_weights(self, file_path, by_name=False, exclude=None):
         import h5py
-        from tensorflow.python.keras import saving
+        from tensorflow.keras import saving
 
         if exclude:
             by_name = True
@@ -323,7 +322,7 @@ class MaskRCNN(Model):
 
     def get_anchors(self, image_shape):
         backbone_shapes = self.compute_backbone_shapes(self.config, image_shape)
-        if not hasattr(self, "_anchor_cache"):
+        if self._anchor_cache is None:
             self._anchor_cache = {}
         if not tuple(image_shape) in self._anchor_cache:
             a = mp_utils.generate_pyramid_anchors(
@@ -337,13 +336,13 @@ class MaskRCNN(Model):
         return self._anchor_cache[tuple(image_shape)]
 
     @staticmethod
-    def fpn_classifier(rois, feature_maps, image_meta, pool_size, num_classes, trainable=None, layer_size=1024):
+    def fpn_classifier(rois, feature_maps, image_meta, pool_size, num_classes, training=None, layer_size=1024):
         x = PyramidROIAlign([pool_size, pool_size])([rois, image_meta] + feature_maps)
         x = TimeDistributed(Conv2D(layer_size, (pool_size, pool_size), padding="VALID"))(x)
-        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = TimeDistributed(BatchNormalization())(x, training=training)
         x = Activation('relu')(x)
         x = TimeDistributed(Conv2D(layer_size, (1, 1)))(x)
-        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = TimeDistributed(BatchNormalization())(x, training=training)
         x = Activation('relu')(x)
         shared = Lambda(lambda x: tf.squeeze(tf.squeeze(x, 3), 2))(x)
 
@@ -357,21 +356,21 @@ class MaskRCNN(Model):
         return mask_rcnn_class_logits, mask_rcnn_probabilities, mask_rcnn_bounding_box
 
     @staticmethod
-    def build_fpn_mask(rois, feature_maps, image_meta, pool_size, num_classes, trainable=None):
+    def build_fpn_mask(rois, feature_maps, image_meta, pool_size, num_classes, training=None):
         # Start with ROI pooling
         x = PyramidROIAlign([pool_size, pool_size])([rois, image_meta] + feature_maps)
         # 4 normal conv layers, a deconv, and a conv with sigmoid.
         x = TimeDistributed(Conv2D(256, (3, 3), padding="SAME"))(x)
-        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = TimeDistributed(BatchNormalization())(x, training=training)
         x = Activation('relu')(x)
         x = TimeDistributed(Conv2D(256, (3, 3), padding="SAME"))(x)
-        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = TimeDistributed(BatchNormalization())(x, training=training)
         x = Activation('relu')(x)
         x = TimeDistributed(Conv2D(256, (3, 3), padding="SAME"))(x)
-        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = TimeDistributed(BatchNormalization())(x, training=training)
         x = Activation('relu')(x)
         x = TimeDistributed(Conv2D(256, (3, 3), padding="SAME"))(x)
-        x = TimeDistributed(BatchNormalization())(x, trainable=trainable)
+        x = TimeDistributed(BatchNormalization())(x, training=training)
         x = Activation('relu')(x)
         x = TimeDistributed(Conv2DTranspose(256, (2, 2), strides=2, activation="relu"))(x)
         x = TimeDistributed(Conv2D(num_classes, (1, 1), strides=1, activation="sigmoid"))(x)
@@ -507,8 +506,8 @@ class MaskRCNN(Model):
         print(f"Starting to train! Learning rate is {learning_rate}")
         print(f"Path to checkpoints is: {self.checkpoint_path}")
 
-        callbacks = [tf.python.keras.callbacks.ModelCheckpoint(self.checkpoint_path, verbose=0, save_weights_only=True),
-                     tf.python.keras.callbacks.TensorBoard(log_dir=self.log_dir, histogram_freq=0, write_graph=True,
+        callbacks = [tf.keras.callbacks.ModelCheckpoint(self.checkpoint_path, verbose=0, save_weights_only=True),
+                     tf.keras.callbacks.TensorBoard(log_dir=self.log_dir, histogram_freq=0, write_graph=True,
                                                            write_images=False)]
 
         self.model.fit(x=x_train, y=y_train, epochs=epochs, callbacks=callbacks, validation_data=validation_data)

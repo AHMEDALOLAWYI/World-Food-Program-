@@ -47,13 +47,6 @@ class Config(object):
     # down the training.
     VALIDATION_STEPS = 50
 
-    # Backbone network architecture
-    # Supported values are: resnet50, resnet101.
-    # You can also provide a callable that should have the signature
-    # of model.resnet_graph. If you do so, you need to supply a callable
-    # to COMPUTE_BACKBONE_SHAPE as well
-    BACKBONE = "resnet101"
-
     # Only useful if you supply a callable to BACKBONE. Should compute
     # the shape of each layer of the FPN Pyramid.
     # See model.compute_backbone_shapes
@@ -205,7 +198,7 @@ class Config(object):
     #     None: Train BN layers. This is the normal mode
     #     False: Freeze BN layers. Good when using a small batch size
     #     True: (don't use). Set layer in training mode even when predicting
-    TRAIN_BN = False  # Defaulting to False since batch size is often small
+    TRAINABLE = False  # Defaulting to False since batch size is often small
 
     # Gradient norm clipping
     GRADIENT_CLIP_NORM = 5.0
