@@ -647,7 +647,13 @@ def trim_zeros(x):
     x: [rows, columns].
     """
     assert len(x.shape) == 2
-    return x[~np.all(x == 0, axis=1)]
+    # This is a gross hack and I'm sorry - Erick
+    try:
+        return x[~np.all(x == 0, axis=1)]
+    except np.AxisError as e:
+        print(f"AxisError: {e}.\nReturning {x} without trimming zeros.")
+        return x
+
 
 
 def compute_matches(gt_boxes, gt_class_ids, gt_masks,
@@ -1101,15 +1107,15 @@ def norm_boxes(boxes, shape):
 def apply_box_deltas(boxes, deltas):
     # Need to cast all of the boxes and deltas to floats since it's breaking my code in TF 2.0
     # Derive height and weight from box shapes
-    height = tf.cast(boxes[:, 2], tf.float64) - tf.cast(boxes[:, 0], tf.float64)
-    width = tf.cast(boxes[:, 3], tf.float64) - tf.cast(boxes[:, 1], tf.float64)
-    center_y = tf.cast(boxes[:, 0], tf.float64) + (height / 2)
-    center_x = tf.cast(boxes[:, 1], tf.float64) + (width / 2)
+    height = tf.cast(boxes[:, 2], tf.float32) - tf.cast(boxes[:, 0], tf.float32)
+    width = tf.cast(boxes[:, 3], tf.float32) - tf.cast(boxes[:, 1], tf.float32)
+    center_y = tf.cast(boxes[:, 0], tf.float32) + (height / 2.0)
+    center_x = tf.cast(boxes[:, 1], tf.float32) + (width / 2.0)
     # Apply deltas
-    center_y += tf.cast(deltas[:, 0], tf.float64) * height
-    center_x += tf.cast(deltas[:, 1], tf.float64) * width
-    height *= tf.exp(deltas[:, 2])
-    width *= tf.exp(deltas[:, 3])
+    center_y += tf.cast(deltas[:, 0], tf.float32) * height
+    center_x += tf.cast(deltas[:, 1], tf.float32) * width
+    height *= tf.exp(tf.cast(deltas[:, 2], tf.float32))
+    width *= tf.exp(tf.cast(deltas[:, 3], tf.float32))
     # Convert back to y1, x1, y2, x2
     y1 = center_y - 0.5 * height
     x1 = center_x - 0.5 * width
@@ -1211,8 +1217,8 @@ def detection_targets_graph(proposals, gt_class_ids, gt_boxes, gt_masks, config)
         proposals = tf.identity(proposals)
 
     # Remove zero padding
-    proposals, _ = trim_zeros_graph(proposals, name="trim_proposals")
-    gt_boxes, non_zeros = trim_zeros_graph(gt_boxes, name="trim_gt_boxes")
+    proposals = trim_zeros(proposals)
+    gt_boxes, non_zeros = trim_zeros(gt_boxes)
     gt_class_ids = tf.boolean_mask(gt_class_ids, non_zeros,
                                    name="trim_gt_class_ids")
     gt_masks = tf.gather(gt_masks, tf.where(non_zeros)[:, 0], axis=2,
@@ -1340,7 +1346,7 @@ class DetectionTargetLayer(Layer):
     """
 
     def __init__(self, config, **kwargs):
-        super(DetectionTargetLayer, self).__init__(**kwargs)
+        super(DetectionTargetLayer, self).__init__(**kwargs, dynamic=True)
         self.config = config
 
     def call(self, inputs):
@@ -1350,8 +1356,7 @@ class DetectionTargetLayer(Layer):
         gt_masks = inputs[3]
 
         # Slice the batch and run a graph for each slice
-        # TODO: Rename target_bbox to target_deltas for clarity
-        names = ["rois", "target_class_ids", "target_bbox", "target_mask"]
+        names = ["rois", "target_class_ids", "target_deltas", "target_mask"]
         outputs = batch_slice(
             [proposals, gt_class_ids, gt_boxes, gt_masks],
             lambda w, x, y, z: detection_targets_graph(
@@ -1359,7 +1364,7 @@ class DetectionTargetLayer(Layer):
             self.config.IMAGES_PER_GPU, names=names)
         return outputs
 
-    def compute_output_shape(self, input_shape):
+    def compute_output_shape(self):
         return [
             (None, self.config.TRAIN_ROIS_PER_IMAGE, 4),  # rois
             (None, self.config.TRAIN_ROIS_PER_IMAGE),  # class_ids
@@ -1370,101 +1375,6 @@ class DetectionTargetLayer(Layer):
 
     def compute_mask(self, inputs, mask=None):
         return [None, None, None, None]
-
-    def refine_detections_graph(rois, probs, deltas, window, config):
-        """Refine classified proposals and filter overlaps and return final
-        detections.
-        Inputs:
-            rois: [N, (y1, x1, y2, x2)] in normalized coordinates
-            probs: [N, num_classes]. Class probabilities.
-            deltas: [N, num_classes, (dy, dx, log(dh), log(dw))]. Class-specific
-                    bounding box deltas.
-            window: (y1, x1, y2, x2) in normalized coordinates. The part of the image
-                that contains the image excluding the padding.
-        Returns detections shaped: [num_detections, (y1, x1, y2, x2, class_id, score)] where
-            coordinates are normalized.
-        """
-        # Class IDs per ROI
-        class_ids = tf.argmax(probs, axis=1, output_type=tf.int32)
-        # Class probability of the top class of each ROI
-        indices = tf.stack([tf.range(probs.shape[0]), class_ids], axis=1)
-        class_scores = tf.gather_nd(probs, indices)
-        # Class-specific bounding box deltas
-        deltas_specific = tf.gather_nd(deltas, indices)
-        # Apply bounding box deltas
-        # Shape: [boxes, (y1, x1, y2, x2)] in normalized coordinates
-        refined_rois = apply_box_deltas(
-            rois, deltas_specific * config.BBOX_STD_DEV)
-        # Clip boxes to image window
-        refined_rois = clip_boxes(refined_rois, window)
-
-        # TODO: Filter out boxes with zero area
-
-        # Filter out background boxes
-        keep = tf.where(class_ids > 0)[:, 0]
-        # Filter out low confidence boxes
-        if config.DETECTION_MIN_CONFIDENCE:
-            conf_keep = tf.where(class_scores >= config.DETECTION_MIN_CONFIDENCE)[:, 0]
-            keep = tf.sets.set_intersection(tf.expand_dims(keep, 0),
-                                            tf.expand_dims(conf_keep, 0))
-            keep = tf.sparse_tensor_to_dense(keep)[0]
-
-        # Apply per-class NMS
-        # 1. Prepare variables
-        pre_nms_class_ids = tf.gather(class_ids, keep)
-        pre_nms_scores = tf.gather(class_scores, keep)
-        pre_nms_rois = tf.gather(refined_rois, keep)
-        unique_pre_nms_class_ids = tf.unique(pre_nms_class_ids)[0]
-
-        def nms_keep_map(class_id):
-            """Apply Non-Maximum Suppression on ROIs of the given class."""
-            # Indices of ROIs of the given class
-            ixs = tf.where(tf.equal(pre_nms_class_ids, class_id))[:, 0]
-            # Apply NMS
-            class_keep = tf.image.non_max_suppression(
-                tf.gather(pre_nms_rois, ixs),
-                tf.gather(pre_nms_scores, ixs),
-                max_output_size=config.DETECTION_MAX_INSTANCES,
-                iou_threshold=config.DETECTION_NMS_THRESHOLD)
-            # Map indices
-            class_keep = tf.gather(keep, tf.gather(ixs, class_keep))
-            # Pad with -1 so returned tensors have the same shape
-            gap = config.DETECTION_MAX_INSTANCES - tf.shape(class_keep)[0]
-            class_keep = tf.pad(class_keep, [(0, gap)],
-                                mode='CONSTANT', constant_values=-1)
-            # Set shape so map_fn() can infer result shape
-            class_keep.set_shape([config.DETECTION_MAX_INSTANCES])
-            return class_keep
-
-        # 2. Map over class IDs
-        nms_keep = tf.map_fn(nms_keep_map, unique_pre_nms_class_ids,
-                             dtype=tf.int64)
-        # 3. Merge results into one list, and remove -1 padding
-        nms_keep = tf.reshape(nms_keep, [-1])
-        nms_keep = tf.gather(nms_keep, tf.where(nms_keep > -1)[:, 0])
-        # 4. Compute intersection between keep and nms_keep
-        keep = tf.sets.set_intersection(tf.expand_dims(keep, 0),
-                                        tf.expand_dims(nms_keep, 0))
-        keep = tf.sparse_tensor_to_dense(keep)[0]
-        # Keep top detections
-        roi_count = config.DETECTION_MAX_INSTANCES
-        class_scores_keep = tf.gather(class_scores, keep)
-        num_keep = tf.minimum(tf.shape(class_scores_keep)[0], roi_count)
-        top_ids = tf.nn.top_k(class_scores_keep, k=num_keep, sorted=True)[1]
-        keep = tf.gather(keep, top_ids)
-
-        # Arrange output as [N, (y1, x1, y2, x2, class_id, score)]
-        # Coordinates are normalized.
-        detections = tf.concat([
-            tf.gather(refined_rois, keep),
-            tf.to_float(tf.gather(class_ids, keep))[..., tf.newaxis],
-            tf.gather(class_scores, keep)[..., tf.newaxis]
-        ], axis=1)
-
-        # Pad with zeros if detections < DETECTION_MAX_INSTANCES
-        gap = config.DETECTION_MAX_INSTANCES - tf.shape(detections)[0]
-        detections = tf.pad(detections, [(0, gap), (0, 0)], "CONSTANT")
-        return detections
 
 
 def refine_detections(rois, probs, deltas, window, config):
@@ -1604,6 +1514,7 @@ class DetectionLayer(Layer):
 
     def compute_output_shape(self, input_shape):
         return (None, self.config.DETECTION_MAX_INSTANCES, 6)
+
 
 def compose_image_meta(image_id, original_image_shape, image_shape,
                        window, scale, active_class_ids):
@@ -1834,11 +1745,11 @@ def mask_rcnn_mask_loss(target_masks, target_class_ids, pred_masks):
                 with values from 0 to 1.
     """
     # Reshape for simplicity. Merge first two dimensions into one.
-    target_class_ids = K.reshape(target_class_ids, (-1,))
+    target_class_ids = tf.reshape(target_class_ids, (-1,))
     mask_shape = tf.shape(target_masks)
-    target_masks = K.reshape(target_masks, (-1, mask_shape[2], mask_shape[3]))
+    target_masks = tf.reshape(target_masks, (-1, mask_shape[2], mask_shape[3]))
     pred_shape = tf.shape(pred_masks)
-    pred_masks = K.reshape(pred_masks,
+    pred_masks = tf.reshape(pred_masks,
                            (-1, pred_shape[2], pred_shape[3], pred_shape[4]))
     # Permute predicted masks to [N, num_classes, height, width]
     pred_masks = tf.transpose(pred_masks, [0, 3, 1, 2])
