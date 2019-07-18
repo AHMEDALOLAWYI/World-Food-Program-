@@ -29,9 +29,10 @@ class CVAE(tf.keras.Model):
                 layers.Conv2D(filters=64, kernel_size=3, strides=(2, 2), activation='relu'),
                 layers.Conv2D(filters=128, kernel_size=3, strides=(2, 2), activation='relu'),
                 layers.Flatten(),
-                layers.Dense(latent_dim * 2)
+                layers.Dense(latent_dim * 2),
             ]
         )
+
         self.generative_net = tf.keras.Sequential(
             [
                 layers.InputLayer(input_shape=(latent_dim,)),
@@ -39,7 +40,7 @@ class CVAE(tf.keras.Model):
                 layers.Reshape(target_shape=(7, 7, 64)),
                 layers.Conv2DTranspose(filters=128, kernel_size=3, strides=(2, 2), padding="SAME", activation='relu'),
                 layers.Conv2DTranspose(filters=64, kernel_size=3, strides=(2, 2), padding="SAME", activation='relu'),
-                layers.Conv2DTranspose(filters=1, kernel_size=3, strides=(1, 1), padding="SAME")
+                layers.Conv2DTranspose(filters=1, kernel_size=3, strides=(1, 1), padding="SAME"),
             ]
         )
 
@@ -111,13 +112,14 @@ if __name__ == "__main__":
     optimizer = tf.keras.optimizers.Adam()
     generate_images(model, 0, vector_for_generation, "test")
     # TODO: Do this for lots of images instead of just one
-    train_x = path_to_images + "00075.png"
+    train_x = tf.io.read_file(path_to_images + "00075.png")
+    train_x = tf.image.decode_image(train_x)
+
     test_x = path_to_images + "00151.png"
     for epoch in range(1, epochs+1):
         for x in train_x:
             gradients, loss = compute_gradients(model, x)
             apply_gradients(optimizer, gradients, model.trainable_variables)
-
         loss = tf.keras.metrics.Mean()
         for x in test_x:
             loss(compute_loss(model, x))
@@ -126,3 +128,4 @@ if __name__ == "__main__":
 
         generate_images(model, epoch, vector_for_generation, "test")
     # TODO: Add commentary so that this is useful for teaching.
+
